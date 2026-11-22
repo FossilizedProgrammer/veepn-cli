@@ -11,12 +11,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	box "github.com/sagernet/sing-box"
@@ -555,7 +553,7 @@ func cmdConnect(args []string) int {
 		upstream:   up,
 	}
 	stopSignals := make(chan os.Signal, 1)
-	signal.Notify(stopSignals, syscall.SIGINT, syscall.SIGTERM)
+	notifyStopSignals(stopSignals)
 	go func() {
 		<-stopSignals
 		fmt.Fprintln(os.Stderr, "\nstopping…")
@@ -911,7 +909,7 @@ func cmdStop() int {
 		fmt.Println("not connected")
 		return 0
 	}
-	_ = syscall.Kill(st.PID, syscall.SIGTERM)
+	_ = terminateProcess(st.PID)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if !st.Alive() {
@@ -921,7 +919,7 @@ func cmdStop() int {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	_ = syscall.Kill(st.PID, syscall.SIGKILL)
+	_ = killProcess(st.PID)
 	config.ClearState()
 	fmt.Println("stopped (forced)")
 	return 0

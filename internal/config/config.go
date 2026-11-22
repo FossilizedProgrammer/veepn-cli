@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -231,8 +230,7 @@ func (s *State) Alive() bool {
 	if s == nil || s.PID <= 0 {
 		return false
 	}
-	err := syscall.Kill(s.PID, 0)
-	return err == nil || err == syscall.EPERM
+	return processRunning(s.PID)
 }
 
 // Uptime is the time since the proxy started.
