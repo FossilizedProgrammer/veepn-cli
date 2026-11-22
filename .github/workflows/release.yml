@@ -1,0 +1,41 @@
+name: Release
+
+# Builds the four static binaries and attaches them to a GitHub release.
+# Triggered by pushing a version tag:  git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests
+        run: go test ./...
+
+      - name: Build static binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./build.sh
+
+      - name: Create release with artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/veepn-linux-amd64
+            dist/veepn-linux-arm64
+            dist/veepn-windows-amd64.exe
+            dist/veepn-windows-arm64.exe

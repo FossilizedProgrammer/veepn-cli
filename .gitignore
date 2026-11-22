@@ -1,0 +1,7 @@
+# Local build output
+/veepn
+/veepn.exe
+/dist/
+
+# Freebuff workspace state
+.freebuff/
