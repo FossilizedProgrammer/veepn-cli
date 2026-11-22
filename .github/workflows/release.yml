@@ -1,6 +1,6 @@
 name: Release
 
-# Builds the four static binaries and attaches them to a GitHub release.
+# Builds the static binaries and attaches them to a GitHub release.
 # Triggered by pushing a version tag:  git tag v1.0.0 && git push origin v1.0.0
 on:
   push:
@@ -37,5 +37,3 @@ jobs:
           files: |
             dist/veepn-linux-amd64
             dist/veepn-linux-arm64
-            dist/veepn-windows-amd64.exe
-            dist/veepn-windows-arm64.exe

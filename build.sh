@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Static cross-build of veepn for Linux and Windows (amd64 + arm64).
+# Static cross-build of veepn for Linux (amd64 + arm64).
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p dist
-for t in "linux amd64" "linux arm64" "windows amd64" "windows arm64"; do
-    set -- $t
-    echo "==> $1/$2"
-    CGO_ENABLED=0 GOOS="$1" GOARCH="$2" go build -trimpath -buildvcs=false \
-        -ldflags "-s -w" -o "dist/veepn-$1-$2$([ "$1" = "windows" ] && echo .exe)" .
+for arch in amd64 arm64; do
+    echo "==> linux/$arch"
+    CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -buildvcs=false \
+        -ldflags "-s -w" -o "dist/veepn-linux-$arch" .
 done
 ls -la dist/
