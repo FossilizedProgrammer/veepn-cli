@@ -26,7 +26,7 @@ import (
 	"veepn/internal/upstream"
 )
 
-const version = "1.0.3"
+const version = "1.0.4"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -527,6 +527,7 @@ func cmdConnect(args []string) int {
 
 	selector := strings.TrimSpace(strings.Join(positional, " "))
 	var candidates []sub.Server
+	var pool []sub.Server
 	mode := "server"
 	switch {
 	case *fastest || selector == "":
@@ -562,6 +563,7 @@ func cmdConnect(args []string) int {
 			return fail("%v", err)
 		}
 		candidates = []sub.Server{s}
+		pool = list
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -575,6 +577,7 @@ func cmdConnect(args []string) int {
 		mode:       mode,
 		candidates: candidates,
 		upstream:   up,
+		pool:       pool,
 	}
 	stopSignals := make(chan os.Signal, 1)
 	notifyStopSignals(stopSignals)
@@ -589,7 +592,7 @@ func cmdConnect(args []string) int {
 		return fail("%v", err)
 	}
 	defer sess.shutdown()
-	fmt.Printf("connected to %s\n", candidates[sess.current].Display())
+	fmt.Printf("connected to %s\n", sess.candidates[sess.current].Display())
 	if up != nil {
 		fmt.Printf("  via:    %s\n", up)
 	}
@@ -657,11 +660,15 @@ type session struct {
 	mode       string
 	candidates []sub.Server
 	upstream   *upstream.Upstream
-	current    int
-	instance   *box.Box
-	exitIP     string
-	latencyMS  int64
-	mu         sync.Mutex
+	// pool is the whole subscription; when a pinned server fails the
+	// tunnel check, the session sweeps it once for fallbacks.
+	pool          []sub.Server
+	fallbackTried bool
+	current       int
+	instance      *box.Box
+	exitIP        string
+	latencyMS     int64
+	mu            sync.Mutex
 }
 
 // start walks the candidate list until one server passes a real
@@ -684,12 +691,14 @@ func (s *session) start(ctx context.Context) error {
 		if err != nil {
 			config.Log("connect %s: %v", srv.Endpoint(), err)
 			fmt.Fprintf(os.Stderr, "skip %s: %v\n", srv.Endpoint(), err)
+			s.addFallbackCandidates(ctx)
 			continue
 		}
 		instance, err := engine.Start(ctx, cfgJSON)
 		if err != nil {
 			config.Log("connect %s: %v", srv.Endpoint(), err)
 			fmt.Fprintf(os.Stderr, "skip %s: %v\n", srv.Endpoint(), err)
+			s.addFallbackCandidates(ctx)
 			continue
 		}
 		exitIP, err := probe.ExitIP(s.socksPort, timeout)
@@ -700,6 +709,7 @@ func (s *session) start(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			s.addFallbackCandidates(ctx)
 			continue
 		}
 		latency, _ := probe.Health(s.socksPort, timeout)
@@ -732,10 +742,74 @@ func (s *session) start(ctx context.Context) error {
 		})
 		return nil
 	}
-	if s.mode == "fastest" {
+	if s.mode == "fastest" || len(s.candidates) > 1 {
 		return fmt.Errorf("could not connect to any server (%d tried)", len(s.candidates))
 	}
 	return fmt.Errorf("could not connect to %s", s.candidates[0].Endpoint())
+}
+
+// addFallbackCandidates keeps the pinned server first and appends the
+// servers that pass a real tunnel check, so a pin that answers a TCP
+// ping but fails the tunnel (dead REALITY key, rotated credentials)
+// falls back instead of ending the session.
+func (s *session) addFallbackCandidates(ctx context.Context) {
+	if s.mode != "server" || s.fallbackTried || len(s.pool) == 0 {
+		return
+	}
+	s.fallbackTried = true
+	pinned := s.candidates[0].Endpoint()
+
+	// Rank by TCP ping first so the real check only covers the most
+	// promising servers instead of the whole subscription.
+	pinged := probe.SweepVia(
+		s.pool,
+		time.Duration(s.cfg.PingTimeoutMS)*time.Millisecond,
+		20,
+		s.upstream,
+	)
+	sort.SliceStable(pinged, func(i, j int) bool {
+		a, b := pinged[i].MS, pinged[j].MS
+		if a < 0 {
+			return false
+		}
+		if b < 0 {
+			return true
+		}
+		return a < b
+	})
+	shortlist := make([]sub.Server, 0, 24)
+	for _, r := range pinged {
+		if r.MS < 0 || r.Server.Endpoint() == pinned {
+			continue
+		}
+		shortlist = append(shortlist, r.Server)
+		if len(shortlist) == 24 {
+			break
+		}
+	}
+	if len(shortlist) == 0 {
+		return
+	}
+
+	timeout := time.Duration(s.cfg.PingTimeoutMS) * time.Millisecond
+	if timeout < 8*time.Second {
+		timeout = 8 * time.Second
+	}
+	checked := probe.RealSweep(ctx, shortlist, s.upstream, timeout, 12, false, nil)
+	sort.SliceStable(checked, func(i, j int) bool {
+		if checked[i].OK != checked[j].OK {
+			return checked[i].OK
+		}
+		return checked[i].LatencyMS < checked[j].LatencyMS
+	})
+	for _, r := range checked {
+		if r.OK {
+			s.candidates = append(s.candidates, r.Server)
+		}
+	}
+	if n := len(s.candidates) - 1; n > 0 {
+		fmt.Fprintf(os.Stderr, "%s did not pass the tunnel check — trying %d verified server(s)\n", pinned, n)
+	}
 }
 
 // runWatchdog checks real traffic every 30 s and reconnects after a
