@@ -106,8 +106,18 @@ func RealSweep(ctx context.Context, list []sub.Server, up *upstream.Upstream, ti
 }
 
 func clientFor(ctx context.Context, srv sub.Server, up *upstream.Upstream, timeout time.Duration) (*http.Client, func(), error) {
-	if srv.Proto == "vmess" {
-		return vmessClient(ctx, srv, up, timeout)
+	// Only Shadowsocks is dialed directly; every other protocol runs
+	// through the sing-box engine (a vless/trojan server used to fall
+	// into the SS branch and crash on empty credentials).
+	if srv.Proto != "ss" && srv.Proto != "" {
+		return engineClient(ctx, srv, up, timeout)
+	}
+	// shadowaead.New accepts unknown method names when a password is
+	// set and then panics on the nil constructor, so only take the
+	// direct path for names it really implements; everything else
+	// (2022-blake3, stream ciphers) goes through sing-box.
+	if !probeSSMethod(srv.Method) {
+		return engineClient(ctx, srv, up, timeout)
 	}
 	method, err := shadowaead.New(srv.Method, nil, srv.Password)
 	if err != nil {
@@ -142,9 +152,21 @@ func clientFor(ctx context.Context, srv sub.Server, up *upstream.Upstream, timeo
 	return newClient(dial, timeout), func() {}, nil
 }
 
-// vmessClient uses a throw-away sing-box instance with a SOCKS
-// inbound, since VMess is only implemented by the full engine.
-func vmessClient(ctx context.Context, srv sub.Server, up *upstream.Upstream, timeout time.Duration) (*http.Client, func(), error) {
+// probeSSMethod reports whether shadowaead supports the method.
+func probeSSMethod(method string) bool {
+	switch method {
+	case "aes-128-gcm", "aes-192-gcm", "aes-256-gcm",
+		"chacha20-ietf-poly1305", "xchacha20-ietf-poly1305":
+		return true
+	default:
+		return false
+	}
+}
+
+// engineClient uses a throw-away sing-box instance with a SOCKS
+// inbound for the protocols only the full engine implements
+// (VMess, VLESS, Trojan).
+func engineClient(ctx context.Context, srv sub.Server, up *upstream.Upstream, timeout time.Duration) (*http.Client, func(), error) {
 	port, err := freePort()
 	if err != nil {
 		return nil, nil, err

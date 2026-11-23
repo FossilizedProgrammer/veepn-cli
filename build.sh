@@ -11,7 +11,8 @@ for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
         out="$out.exe"
     fi
     echo "==> $os/$arch"
-    CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -buildvcs=false \
-        -ldflags "-s -w" -o "$out" .
+    # with_utls is required by VLESS REALITY servers (uTLS fingerprint).
+    CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -tags with_utls \
+        -trimpath -buildvcs=false -ldflags "-s -w" -o "$out" .
 done
 ls -la dist/

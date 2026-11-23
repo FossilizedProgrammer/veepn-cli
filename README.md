@@ -1,20 +1,22 @@
 # VeePN CLI (proxy-only)
 
 دسکتاپ/لینوکسی معادل اپ اندروید VeePN: **همان سرورهای رایگان خود اپ** را
-می‌گیرد (بدون نیاز به تعریف اشتراک)، همان `ss://` و `vmess://` را پارس می‌کند،
+می‌گیرد (بدون نیاز به تعریف اشتراک)، همان `ss://`، `vmess://`، `vless://` و
+`trojan://` را پارس می‌کند،
 سرورها را ping می‌زند و یکی را پشت یک **پروکسی لوکال** (SOCKS5 + HTTP) اجرا
 می‌کند. هیچ TUN/VPN ساخته نمی‌شود.
 
 موتور پروتکل، کتابخانهٔ [sing-box](https://github.com/SagerNet/sing-box) است —
 همان چیزی که اپ اندروید با `libbox` استفاده می‌کند، پس همان outboundها
-(Shadowsocks، VMess با ws/http/grpc/quic/httpupgrade و TLS) و همان inbound
+(Shadowsocks، VMess/VLESS/Trojan با ws/http/grpc/quic/httpupgrade، TLS،
+REALITY و uTLS) و همان inbound
 مختلط در دسترس‌اند.
 
 ## ساخت
 
 ```bash
 cd veepn-cli
-go build -o veepn .
+go build -tags with_utls -o veepn .   # with_utls برای VLESS REALITY لازم است
 ./veepn help
 ```
 
@@ -42,7 +44,7 @@ veepn config show
 | کلید | پیش‌فرض | معنی |
 |---|---|---|
 | `subscription_url` | لیست رایگان اپ | اشتراک اصلی (لیست `ss://`)؛ خالی = رایگان |
-| `backup_url` | بکاپ رایگان اپ | اشتراک پشتیبان (base64 از `vmess://`) |
+| `backup_url` | بکاپ رایگان اپ | اشتراک پشتیبان (base64؛ لیست ترکیبی `ss`/`vmess`/`vless`/`trojan`) |
 | `socks_port` | `1080` | پورت inbound مختلط SOCKS5+HTTP (1-65535) |
 | `http_port` | `8080` | پورت inbound HTTP (۰ = خاموش، برابر socks = همان inbound مختلط) |
 | `ping_timeout_ms` | `3000` | تایم‌اوت هر probe |
@@ -137,8 +139,8 @@ curl -x http://127.0.0.1:8080     https://example.com
 
 | اپ اندروید | این CLI |
 |---|---|
-| `SubscriptionApi` — اشتراک اصلی `ss://` + پشتیبان `vmess://` | `servers` (همان ترتیب: اول اصلی، در صورت خطا/خالی بودن پشتیبان) |
-| پارس `ss://`/`vmess://`، حذف loopback، حذف نام‌های status/expiry، استخراج پرچم | همان قواعد در `internal/sub` |
+| `SubscriptionApi` — اشتراک اصلی `ss://` + پشتیبان ترکیبی | `servers` (همان ترتیب: اول اصلی، در صورت خطا/خالی بودن پشتیبان) |
+| پارس `ss://`/`vmess://`/`vless://`/`trojan://`، حذف loopback، حذف نام‌های status/expiry، استخراج پرچم | همان قواعد در `internal/sub` |
 | کش ۳۰ دقیقه‌ای حافظه + کش آفلاین (`lastFetchForCache`) | `cache.json` با همان قالب `{fetchedAt,kind,text}`؛ در صورت قطعی، لیست کش‌شده برمی‌گردد |
 | Ping sweep موازی ۲۰ تایی + انتخاب Fastest با live-switch و skip سرورهای fail‌شده | `ping` و حالت پیش‌فرض `connect` (مرتب‌سازی بر اساس ms، تلاش پشت‌سرهم) |
 | حالت پروکسی: `mixed` روی 1080 + `http` روی 8080 | همان دو inbound روی 127.0.0.1 |

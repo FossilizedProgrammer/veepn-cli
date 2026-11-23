@@ -48,6 +48,24 @@ func TestBuildConfigVariants(t *testing.T) {
 			s.Network, s.Path, s.Host, s.TLS = "httpupgrade", "/hu", "cdn.example", "tls"
 			return s
 		}(),
+		func() sub.Server {
+			s := base
+			s.Proto, s.TLS, s.ServerName, s.Flow = "vless", "tls", "cdn.example", "xtls-rprx-vision"
+			s.Fingerprint, s.PublicKey, s.ShortID = "firefox", "PUBKEY", "ab12"
+			return s
+		}(),
+		func() sub.Server {
+			s := base
+			s.Proto, s.Network, s.Path, s.Host = "vless", "ws", "/ws", "cdn.example"
+			s.TLS, s.ServerName, s.ALPN = "tls", "cdn.example", "h2,http/1.1"
+			return s
+		}(),
+		func() sub.Server {
+			s := base
+			s.Proto, s.UUID, s.Password, s.Network = "trojan", "", "pw", "tcp"
+			s.TLS, s.ServerName = "tls", "t.example"
+			return s
+		}(),
 	}
 	ctx := include.Context(context.Background())
 	for i, srv := range cases {

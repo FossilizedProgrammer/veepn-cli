@@ -26,7 +26,7 @@ import (
 	"veepn/internal/upstream"
 )
 
-const version = "1.0.2"
+const version = "1.0.3"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -208,7 +208,8 @@ func cmdServers(args []string) int {
 	for i, s := range list {
 		name := serverLabel(s)
 		detail := s.Method
-		if s.Proto == "vmess" {
+		switch s.Proto {
+		case "vmess", "vless", "trojan":
 			detail = s.Network
 			if s.TLS == "tls" {
 				detail += "+tls"

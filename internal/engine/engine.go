@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/include"
@@ -149,56 +150,125 @@ func buildOutbound(s sub.Server) (map[string]any, error) {
 			"alter_id":    s.AlterID,
 			"security":    "auto",
 		}
-		// sing-box accepts only http/ws/quic/grpc/httpupgrade as a
-		// transport; plain TCP must have no transport object at all.
-		switch s.Network {
-		case "ws":
-			tr := map[string]any{"type": "ws"}
-			if s.Path != "" {
-				tr["path"] = s.Path
-			}
-			if s.Host != "" {
-				tr["headers"] = map[string]any{"Host": s.Host}
-			}
-			out["transport"] = tr
-		case "http", "h2":
-			tr := map[string]any{"type": "http"}
-			if s.Host != "" {
-				tr["host"] = []any{s.Host}
-			}
-			if s.Path != "" {
-				tr["path"] = s.Path
-			}
-			out["transport"] = tr
-		case "grpc":
-			tr := map[string]any{"type": "grpc"}
-			if s.Path != "" {
-				tr["service_name"] = s.Path
-			}
-			out["transport"] = tr
-		case "quic":
-			out["transport"] = map[string]any{"type": "quic"}
-		case "httpupgrade":
-			tr := map[string]any{"type": "httpupgrade"}
-			if s.Host != "" {
-				tr["host"] = s.Host
-			}
-			if s.Path != "" {
-				tr["path"] = s.Path
-			}
-			out["transport"] = tr
+		applyTransport(out, s)
+		applyTLS(out, s)
+		return out, nil
+	case "vless":
+		if s.UUID == "" {
+			return nil, fmt.Errorf("server %s has no VLESS uuid", s.Endpoint())
 		}
-		if s.TLS == "tls" {
-			sni := s.ServerName
-			if sni == "" {
-				sni = s.IP
-			}
-			out["tls"] = map[string]any{"enabled": true, "server_name": sni}
+		out := map[string]any{
+			"type":        "vless",
+			"tag":         "proxy-out",
+			"server":      s.IP,
+			"server_port": s.Port,
+			"uuid":        s.UUID,
 		}
+		if s.Flow != "" {
+			out["flow"] = s.Flow
+		}
+		applyTransport(out, s)
+		applyTLS(out, s)
+		return out, nil
+	case "trojan":
+		if s.Password == "" {
+			return nil, fmt.Errorf("server %s has no Trojan password", s.Endpoint())
+		}
+		out := map[string]any{
+			"type":        "trojan",
+			"tag":         "proxy-out",
+			"server":      s.IP,
+			"server_port": s.Port,
+			"password":    s.Password,
+		}
+		applyTransport(out, s)
+		applyTLS(out, s)
 		return out, nil
 	default:
 		return nil, fmt.Errorf("unsupported protocol %q", s.Proto)
 	}
+}
+
+// applyTransport adds the V2Ray transport object. sing-box accepts
+// only http/ws/quic/grpc/httpupgrade; plain TCP must have no transport
+// object at all.
+func applyTransport(out map[string]any, s sub.Server) {
+	switch s.Network {
+	case "ws":
+		tr := map[string]any{"type": "ws"}
+		if s.Path != "" {
+			tr["path"] = s.Path
+		}
+		if s.Host != "" {
+			tr["headers"] = map[string]any{"Host": s.Host}
+		}
+		out["transport"] = tr
+	case "http", "h2":
+		tr := map[string]any{"type": "http"}
+		if s.Host != "" {
+			tr["host"] = []any{s.Host}
+		}
+		if s.Path != "" {
+			tr["path"] = s.Path
+		}
+		out["transport"] = tr
+	case "grpc":
+		tr := map[string]any{"type": "grpc"}
+		if s.Path != "" {
+			tr["service_name"] = s.Path
+		}
+		out["transport"] = tr
+	case "quic":
+		out["transport"] = map[string]any{"type": "quic"}
+	case "httpupgrade":
+		tr := map[string]any{"type": "httpupgrade"}
+		if s.Host != "" {
+			tr["host"] = s.Host
+		}
+		if s.Path != "" {
+			tr["path"] = s.Path
+		}
+		out["transport"] = tr
+	}
+}
+
+// applyTLS enables TLS, REALITY and uTLS when the share link asked for
+// them (VLESS/REALITY subscriptions are common now).
+func applyTLS(out map[string]any, s sub.Server) {
+	if s.TLS != "tls" {
+		return
+	}
+	sni := s.ServerName
+	if sni == "" {
+		sni = s.IP
+	}
+	tls := map[string]any{"enabled": true, "server_name": sni}
+	if s.Insecure {
+		tls["insecure"] = true
+	}
+	if alpn := strings.TrimSpace(s.ALPN); alpn != "" {
+		parts := strings.Split(alpn, ",")
+		list := make([]any, 0, len(parts))
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				list = append(list, p)
+			}
+		}
+		if len(list) > 0 {
+			tls["alpn"] = list
+		}
+	}
+	if s.Fingerprint != "" {
+		tls["utls"] = map[string]any{"enabled": true, "fingerprint": s.Fingerprint}
+	}
+	if s.PublicKey != "" {
+		tls["reality"] = map[string]any{
+			"enabled":    true,
+			"public_key": s.PublicKey,
+			"short_id":   s.ShortID,
+		}
+	}
+	out["tls"] = tls
 }
 
 // Start creates and starts a sing-box instance. Close it to stop.

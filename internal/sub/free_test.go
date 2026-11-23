@@ -57,3 +57,31 @@ func TestParseSSLineFreeLink(t *testing.T) {
 		t.Fatalf("got ip=%q port=%d flag=%q", s.IP, s.Port, s.Flag)
 	}
 }
+
+// TestParseVmessBlobMixed keeps every supported server when the backup
+// subscription serves a mixed list instead of vmess-only.
+func TestParseVmessBlobMixed(t *testing.T) {
+	cred := base64.RawURLEncoding.EncodeToString([]byte("aes-256-gcm:pass"))
+	ssLine := "ss://" + cred + "@1.2.3.4:8388#DE"
+	vmessJSON := `{"ps":"NL","add":"5.6.7.8","port":443,"id":"11111111-1111-1111-1111-111111111111","aid":0,"net":"ws","type":"none","host":"a.example","path":"/ws","tls":"tls"}`
+	vmessLine := "vmess://" + base64.RawURLEncoding.EncodeToString([]byte(vmessJSON))
+	plain := vmessLine + "\n" + ssLine + "\n" +
+		"hysteria2://pw@9.9.9.9:443?sni=x#unsupported\n"
+
+	for name, blob := range map[string]string{
+		"base64":    base64.StdEncoding.EncodeToString([]byte(plain)),
+		"plaintext": plain,
+	} {
+		list := ParseVmessBlob(blob)
+		if len(list) != 2 {
+			t.Fatalf("%s: got %d servers, want 2 (%+v)", name, len(list), list)
+		}
+		protos := map[string]bool{}
+		for _, s := range list {
+			protos[s.Proto] = true
+		}
+		if !protos["ss"] || !protos["vmess"] {
+			t.Fatalf("%s: protos = %v, want ss and vmess", name, protos)
+		}
+	}
+}

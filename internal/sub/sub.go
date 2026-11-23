@@ -73,10 +73,10 @@ type Server struct {
 	Method   string `json:"method,omitempty"`
 	Password string `json:"password,omitempty"`
 	Flag     string `json:"flag,omitempty"`
-	Proto    string `json:"proto"` // "ss" or "vmess"
+	Proto    string `json:"proto"` // "ss", "vmess", "vless" or "trojan"
 	Name     string `json:"name,omitempty"`
 
-	// VMess only.
+	// VMess/VLESS/Trojan.
 	UUID       string `json:"uuid,omitempty"`
 	AlterID    int    `json:"alter_id,omitempty"`
 	Network    string `json:"network,omitempty"`
@@ -85,6 +85,14 @@ type Server struct {
 	Path       string `json:"path,omitempty"`
 	TLS        string `json:"tls,omitempty"`
 	ServerName string `json:"server_name,omitempty"`
+
+	// VLESS/Trojan extras from the share link query.
+	Flow        string `json:"flow,omitempty"`
+	PublicKey   string `json:"pbk,omitempty"`  // REALITY
+	ShortID     string `json:"sid,omitempty"`  // REALITY
+	Fingerprint string `json:"fp,omitempty"`   // uTLS
+	ALPN        string `json:"alpn,omitempty"` // comma separated
+	Insecure    bool   `json:"insecure,omitempty"`
 }
 
 // Display is the credential-free label used in tables and logs.
@@ -100,10 +108,16 @@ func (s Server) Display() string {
 }
 
 func protoShort(p string) string {
-	if p == "vmess" {
+	switch p {
+	case "vmess":
 		return "VM"
+	case "vless":
+		return "VL"
+	case "trojan":
+		return "TR"
+	default:
+		return "SS"
 	}
-	return "SS"
 }
 
 // Endpoint is the host:port the client connects to.
@@ -113,7 +127,7 @@ func (s Server) Endpoint() string { return s.IP + ":" + strconv.Itoa(s.Port) }
 // lastFetchForCache()/parseCacheJson() blob.
 type CacheFormat struct {
 	FetchedAt int64  `json:"fetchedAt"`
-	Kind      string `json:"kind"` // "ss" | "vmess"
+	Kind      string `json:"kind"` // "ss" | "mixed"
 	Text      string `json:"text"`
 }
 
@@ -349,21 +363,155 @@ func ParseSSLine(line string) *Server {
 	return &Server{Proto: "ss", IP: ip, Port: port, Method: method, Password: password, Flag: flag}
 }
 
-// ParseVmessBlob decodes a whole-body base64 V2Ray subscription.
+// ParseVmessBlob decodes a whole-body subscription and parses every
+// supported link in it. The name is historical: the backup used to be
+// vmess-only, but it now ships a mixed list (ss://, vmess://, and
+// protocols this client does not run). Parsing just vmess dropped
+// almost the whole list, which left the app with one dead server.
 func ParseVmessBlob(blob string) []Server {
 	decoded, ok := decodeBase64(strings.TrimSpace(blob))
 	if !ok {
-		return nil
+		// Some subscriptions serve the plain text directly.
+		decoded = blob
 	}
 	var out []Server
 	sc := bufio.NewScanner(strings.NewReader(decoded))
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
-		if s := ParseVmessLine(strings.TrimSpace(sc.Text())); s != nil {
+		if s := ParseAnyLine(strings.TrimSpace(sc.Text())); s != nil {
 			out = append(out, *s)
 		}
 	}
 	return out
+}
+
+// ParseAnyLine parses one subscription line of any scheme this client
+// can run. Unsupported schemes are skipped instead of aborting.
+func ParseAnyLine(line string) *Server {
+	switch {
+	case strings.HasPrefix(line, "ss://"):
+		return ParseSSLine(line)
+	case strings.HasPrefix(line, "vmess://"):
+		return ParseVmessLine(line)
+	case strings.HasPrefix(line, "vless://"):
+		return ParseVlessLine(line)
+	case strings.HasPrefix(line, "trojan://"):
+		return ParseTrojanLine(line)
+	default:
+		return nil
+	}
+}
+
+// ParseVlessLine parses a vless:// link (TCP/WS/gRPC, TLS or REALITY).
+func ParseVlessLine(line string) *Server {
+	u, err := url.Parse(line)
+	if err != nil || u.Scheme != "vless" || u.Hostname() == "" {
+		return nil
+	}
+	uuid := strings.TrimSpace(u.User.Username())
+	if uuid == "" {
+		return nil
+	}
+	s := shareLinkBase(u, "vless")
+	if s == nil {
+		return nil
+	}
+	s.UUID = uuid
+	applyShareQuery(s, u.Query())
+	if s.Name == "" {
+		s.Name = "vless " + s.Endpoint()
+	}
+	return s
+}
+
+// ParseTrojanLine parses a trojan:// link.
+func ParseTrojanLine(line string) *Server {
+	u, err := url.Parse(line)
+	if err != nil || u.Scheme != "trojan" || u.Hostname() == "" {
+		return nil
+	}
+	password := strings.TrimSpace(u.User.Username())
+	if password == "" {
+		return nil
+	}
+	s := shareLinkBase(u, "trojan")
+	if s == nil {
+		return nil
+	}
+	s.Password = password
+	applyShareQuery(s, u.Query())
+	if s.TLS == "" {
+		// Trojan is TLS by default unless the link says otherwise.
+		s.TLS = "tls"
+	}
+	if s.Name == "" {
+		s.Name = "trojan " + s.Endpoint()
+	}
+	return s
+}
+
+// shareLinkBase fills the fields shared by vless:// and trojan:// links.
+func shareLinkBase(u *url.URL, proto string) *Server {
+	host := u.Hostname()
+	port := 443
+	if raw := u.Port(); raw != "" {
+		p, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil
+		}
+		port = p
+	}
+	if port <= 0 || port > 65535 || IsLoopback(host) {
+		return nil
+	}
+	name := strings.TrimSpace(u.Fragment)
+	if IsInfoName(name) {
+		return nil
+	}
+	s := &Server{Proto: proto, IP: host, Port: port, Name: name}
+	if f := FlagFromName(name); f != "" {
+		s.Flag = f
+	} else {
+		s.Flag = "\U0001F310"
+	}
+	return s
+}
+
+// applyShareQuery maps the V2Ray share-link query onto the outbound.
+func applyShareQuery(s *Server, q url.Values) {
+	if t := strings.ToLower(q.Get("type")); t != "" && t != "tcp" && t != "none" {
+		s.Network = t
+	} else {
+		s.Network = "tcp"
+	}
+	s.Path = q.Get("path")
+	s.Host = q.Get("host")
+	s.Flow = q.Get("flow")
+	s.ServerName = q.Get("sni")
+	if s.ServerName == "" {
+		s.ServerName = q.Get("peer")
+	}
+	s.PublicKey = q.Get("pbk")
+	s.ShortID = q.Get("sid")
+	s.Fingerprint = q.Get("fp")
+	s.ALPN = q.Get("alpn")
+
+	security := strings.ToLower(q.Get("security"))
+	switch security {
+	case "tls", "reality", "xtls":
+		s.TLS = "tls"
+	case "none", "":
+		s.TLS = "none"
+	default:
+		s.TLS = "tls"
+	}
+	if s.TLS == "tls" && s.ServerName == "" {
+		s.ServerName = s.IP
+	}
+	switch strings.ToLower(q.Get("insecure") + q.Get("allowinsecure")) {
+	case "1", "true", "1true", "true1":
+		s.Insecure = true
+	}
 }
 
 // ParseVmessLine parses one vmess://base64url(JSON) link.
