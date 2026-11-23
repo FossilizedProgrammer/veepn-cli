@@ -26,7 +26,7 @@ import (
 	"veepn/internal/upstream"
 )
 
-const version = "1.0.0"
+const version = "1.0.2"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -75,11 +75,13 @@ func usage() {
 	fmt.Print(`VeePN CLI — subscription proxy for the desktop (local proxy only, no VPN)
 
 Usage:
-  veepn servers [--refresh] [--json]
+  veepn servers [--refresh] [--json] [--upstream URL]
         List the servers. Out of the box this is the app's own free
         subscription (primary ss:// list, then the vmess backup;
         cached for 30 min and kept for offline use). Set your own
         with 'config set subscription_url' to use it instead.
+        --upstream downloads the subscription through that proxy
+        when http_proxy is not set.
 
   veepn ping [--json] [--timeout MS] [--parallel N] [--upstream URL]
         TCP latency sweep over all servers (20 at a time).
@@ -90,7 +92,7 @@ Usage:
         ones by latency/speed. This always tests the built-in free
         servers; add --configured to test your own subscription.
 
-  veepn connect [SELECTOR] [--fastest] [--socks PORT] [--http PORT] [--no-watchdog] [--upstream URL]
+  veepn  connect [SELECTOR] [--fastest] [--socks PORT] [--http PORT] [--no-watchdog] [--upstream URL]
         Start the local proxy on 127.0.0.1 (SOCKS5+HTTP on --socks,
         HTTP on --http). SELECTOR is a list index, ip:port, or part
         of a server name/flag. Without one, the fastest server is
@@ -98,6 +100,8 @@ Usage:
         --upstream the servers are reached through another proxy
         (socks5://host:port or http://host:port, credentials allowed
         as socks5://user:pass@host:port); ping/test accept it too.
+        When http_proxy is not set, --upstream also downloads the
+        subscription through that proxy.
 
   veepn status [--json] [--check]
   veepn stop
@@ -117,7 +121,7 @@ Env overrides: VEEPN_SUB, VEEPN_SUB_BACKUP, VEEPN_HTTP_PROXY,
 
 // ---------- helpers ----------
 
-func fetchOptions(cfg config.Config, force bool) sub.Options {
+func fetchOptions(cfg config.Config, force bool, proxy string) sub.Options {
 	ttl := time.Duration(cfg.CacheTTLMinutes) * time.Minute
 	if force {
 		ttl = 0
@@ -125,14 +129,28 @@ func fetchOptions(cfg config.Config, force bool) sub.Options {
 	return sub.Options{
 		URL:      cfg.SubscriptionURL,
 		Backup:   cfg.BackupURL,
-		Proxy:    cfg.HTTPProxy,
+		Proxy:    proxy,
 		CacheDir: config.Dir(),
 		TTL:      ttl,
 	}
 }
 
-func loadServers(cfg config.Config, force bool) ([]sub.Server, bool, error) {
-	list, cached, err := sub.Fetch(fetchOptions(cfg, force))
+// fetchProxy picks the proxy used to download the subscription itself.
+// An explicit http_proxy setting wins; otherwise the run's upstream is
+// reused, because in a filtered network the subscription endpoint is
+// usually blocked too while the upstream tunnel is up.
+func fetchProxy(cfg config.Config, up *upstream.Upstream) string {
+	if p := strings.TrimSpace(cfg.HTTPProxy); p != "" {
+		return p
+	}
+	if up == nil {
+		return ""
+	}
+	return up.ProxyURL()
+}
+
+func loadServers(cfg config.Config, up *upstream.Upstream, force bool) ([]sub.Server, bool, error) {
+	list, cached, err := sub.Fetch(fetchOptions(cfg, force, fetchProxy(cfg, up)))
 	if len(list) == 0 {
 		if err == nil {
 			err = fmt.Errorf("no servers")
@@ -166,11 +184,16 @@ func cmdServers(args []string) int {
 	fs := newFlagSet("servers")
 	refresh := fs.Bool("refresh", false, "ignore the cache and fetch now")
 	asJSON := fs.Bool("json", false, "print JSON")
+	upstreamFlag := fs.String("upstream", "", "download the subscription through this proxy (socks5:// or http://)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	cfg := config.Load()
-	list, cached, err := loadServers(cfg, *refresh)
+	up, err := resolveUpstream(cfg, *upstreamFlag)
+	if err != nil {
+		return fail("%v", err)
+	}
+	list, cached, err := loadServers(cfg, up, *refresh)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -214,7 +237,7 @@ func cmdPing(args []string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	list, _, err := loadServers(cfg, false)
+	list, _, err := loadServers(cfg, up, false)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -293,7 +316,7 @@ func cmdTest(args []string) int {
 		cfg.SubscriptionURL = config.DefaultSubscriptionURL
 		cfg.BackupURL = config.DefaultBackupURL
 	}
-	list, cached, err := loadServers(cfg, false)
+	list, cached, err := loadServers(cfg, up, false)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -495,7 +518,7 @@ func cmdConnect(args []string) int {
 		return fail("already running (pid %d) on SOCKS 127.0.0.1:%d — run `veepn stop` first", st.PID, st.SocksPort)
 	}
 
-	list, _, err := loadServers(cfg, false)
+	list, _, err := loadServers(cfg, up, false)
 	if err != nil {
 		config.Log("connect: subscription failed: %v", err)
 		return fail("%v", err)

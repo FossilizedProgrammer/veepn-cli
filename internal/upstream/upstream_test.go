@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"veepn/internal/engine"
@@ -247,4 +248,42 @@ func pipe(c net.Conn, buffered *bufio.Reader, upstream net.Conn) {
 	go func() { _, _ = io.Copy(upstream, buffered); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(c, upstream); done <- struct{}{} }()
 	<-done
+}
+
+func TestProxyURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{in: "socks5://127.0.0.1:1080", want: "socks5://127.0.0.1:1080"},
+		{in: "socks5h://u:p@10.0.0.2:9050", want: "socks5://u:p@10.0.0.2:9050"},
+		{in: "http://u:p%40ss@192.168.1.5:8080", want: "http://u:p%40ss@192.168.1.5:8080"},
+		{in: "127.0.0.1:7890", want: "socks5://127.0.0.1:7890"},
+	}
+	for _, c := range cases {
+		up, err := upstream.Parse(c.in)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.in, err)
+		}
+		if got := up.ProxyURL(); got != c.want {
+			t.Errorf("ProxyURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	var nilUp *upstream.Upstream
+	if got := nilUp.ProxyURL(); got != "" {
+		t.Errorf("nil ProxyURL() = %q, want empty", got)
+	}
+}
+
+func TestProxyURLKeepsPasswordOutOfString(t *testing.T) {
+	up, err := upstream.Parse("socks5://user:secret@127.0.0.1:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(up.String(), "secret") {
+		t.Errorf("String() leaked the password: %q", up.String())
+	}
+	if !strings.Contains(up.ProxyURL(), "secret") {
+		t.Errorf("ProxyURL() dropped the password: %q", up.ProxyURL())
+	}
 }

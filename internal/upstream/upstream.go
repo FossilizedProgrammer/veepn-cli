@@ -109,6 +109,20 @@ func (u *Upstream) scheme() string {
 	return "socks5"
 }
 
+// ProxyURL is the full URL including credentials, for handing to
+// net/http (the subscription fetch). String() deliberately hides the
+// password, so it must not be used for this.
+func (u *Upstream) ProxyURL() string {
+	if u == nil {
+		return ""
+	}
+	parsed := url.URL{Scheme: u.scheme(), Host: u.Addr()}
+	if u.Username != "" {
+		parsed.User = url.UserPassword(u.Username, u.Password)
+	}
+	return parsed.String()
+}
+
 // Outbound returns the sing-box outbound that dials the upstream.
 // The server outbound points at it with "detour": "upstream-out".
 func (u *Upstream) Outbound() map[string]any {

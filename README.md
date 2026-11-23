@@ -49,7 +49,7 @@ veepn config show
 | `cache_ttl_minutes` | `30` | عمر کش اشتراک |
 | `log_level` | `warn` | سطح لاگ sing-box |
 | `watchdog` | `true` | سلامت‌سنجی و اتصال مجدد خودکار |
-| `http_proxy` | — | پروکسی برای *گرفتن خود اشتراک* (اختیاری) |
+| `http_proxy` | — | پروکسی برای *گرفتن خود اشتراک* (اختیاری؛ خالی = استفاده از `upstream`) |
 | `upstream` | — | پروکسی زنجیره‌ای برای *رسیدن به سرورها*: `socks5://host:port` یا `http://host:port` |
 
 متغیرهای محیطی: `VEEPN_SUB`، `VEEPN_SUB_BACKUP`، `VEEPN_HTTP_PROXY`،
@@ -73,6 +73,12 @@ veepn config set upstream socks5://127.0.0.1:1080   # دائمی
   ترافیک هم از همان مسیر می‌روند.
 - `ping`/`test` هم از upstream عبور می‌کنند، پس انتخاب «سریع‌ترین» همان مسیری
   را می‌سنجد که `connect` استفاده می‌کند.
+- دانلود خودِ subscription هم از همان upstream رد می‌شود، مگر اینکه
+  `http_proxy` جداگانه ست شده باشد (آن اولویت دارد). این یعنی وقتی لیست
+  سرورها هم فیلتر است، `veepn ping --upstream socks5://127.0.0.1:1080`
+  بدون تنظیم اضافی کار می‌کند.
+- `servers` هم فلگ `--upstream` را می‌پذیرد و فقط برای گرفتن subscription
+  از آن استفاده می‌کند: `veepn servers --json --upstream socks5://127.0.0.1:1080`.
 - `https://` برای upstream پشتیبانی نمی‌شود (فقط `socks5://` و `http://`).
 - اعتبارنامه فقط در لاگ/وضعیت پنهان می‌شود؛ در `config.json` ذخیره می‌شود.
 
@@ -100,7 +106,7 @@ veepn config set upstream socks5://127.0.0.1:1080   # دائمی
 ## دستورها
 
 ```bash
-veepn servers [--refresh] [--json]   # لیست سرورها (کش ۳۰ دقیقه‌ای + کش آفلاین)
+veepn servers [--refresh] [--json] [--upstream URL]   # لیست سرورها (کش ۳۰ دقیقه‌ای + کش آفلاین)
 veepn test [--speed] [--json] [--top N]  # تست واقعی و رتبه‌بندی سرورهای رایگان
 veepn ping [--json] [--timeout MS]   # فقط TCP ping (سریع ولی دقیق نیست)
 veepn connect                       # سریع‌ترین سرور + failover خودکار
